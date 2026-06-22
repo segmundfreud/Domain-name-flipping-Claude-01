@@ -473,35 +473,67 @@ PRESETS: dict[str, dict] = {
     "ai-saas": {
         "buyer_intent": "very high",
         "keywords": [
-            "ai", "agent", "prompt", "model", "workflow", "copilot", "data",
+            "ai", "agent", "prompt", "model", "workflow", "data",
             "insight", "bot", "neural", "task", "ops", "stack", "flow",
             "automate", "sync", "parse", "embed", "infer", "query",
         ],
-        "prefixes": ["get", "go", "run", "use", "try", "my", "open", "super"],
-        "suffixes": ["ly", "io", "hq", "lab", "co", "fy", "base", "ops",
-                     "hub", "ai", "core", "mind", "iq", "gpt", "ml"],
+        "prefixes": ["get", "go", "run", "use", "try", "open", "super"],
+        "suffixes": [
+            "ly", "io", "hq", "lab", "co", "fy", "base", "ops",
+            "hub", "core", "mind", "iq", "ml",
+            "ora", "ivo", "iva", "nova", "wise", "forge", "arc",
+        ],
         "patterns": [
+            # Compound keyword patterns (existing, curated)
             "agentflow", "agentops", "agentiq", "agenthq", "agentbase",
-            "promptly", "promptlab", "promptops", "prompthq",
-            "taskflow", "taskops", "taskhq", "taskbase", "taskly",
-            "flowops", "flowbase", "flowhq", "flowai", "flowcore",
-            "copilotly", "copilothq",
+            "promptlab", "promptops", "prompthq",
+            "taskflow", "taskops", "taskhq", "taskbase",
+            "flowops", "flowbase", "flowhq", "flowcore",
             "neuralops", "neuralhq", "neuralbase",
-            "inferai", "inferops", "inferhq",
-            "embedai", "embedops",
+            "inferops", "inferhq",
+            "embedops",
             "syncops", "synchq", "syncflow",
-            "queryai", "queryhq",
-            "stackai", "stackops", "stackflow", "stackhq",
-            "insightops", "insighthq", "insightai",
+            "queryhq",
+            "stackops", "stackflow", "stackhq",
+            "insightops", "insighthq",
             "dataops", "datahq", "dataflow", "datacore",
             "botflow", "bothq", "botops",
             "modelops", "modelhq",
-            "runai", "runops", "runflow",
+            "runops", "runflow",
             "openflow", "openops",
             "superops", "superhq",
+            # Invented brandable blends — -ora family
+            "neuravo", "agentra", "automora", "flowana", "syncora",
+            "dativa", "opsara", "taskora", "agentora", "promptora",
+            "flowora", "dataora", "modelora", "stackora", "inferora",
+            "embedora", "queryora", "botora", "neuriva",
+            # Invented blends — -ivo / -iva family
+            "agentivo", "taskivo", "syncivo", "flowivo",
+            "taskiva", "synciva", "flowiva", "inferiva", "dataiva",
+            # Invented blends — -nova family
+            "tasknova", "flownova", "syncnova", "datanova", "agenova",
+            "opsnova", "modelnova",
+            # Invented blends — -ix / -yx family
+            "agentix", "taskix", "syncix", "flowix", "promptyx",
+            # Invented blends — -wise family
+            "agentwise", "taskwise", "datawise", "flowwise", "stackwise",
+            # Invented blends — -forge family
+            "dataforge", "flowforge", "taskforge",
+            # Invented blends — -arc family
+            "agentarc", "taskarc", "flowarc",
+            # Invented blends — -era / -pilot families
+            "taskera", "flowera", "synera",
+            "taskpilot", "datapilot", "flowpilot",
+            # Other invented words
+            "modelio", "botiva",
         ],
-        "avoid": {"free", "cheap", "best", "online", "web", "digital",
-                  "pro", "smart", "easy", "fast", "new", "top"},
+        "avoid": {
+            "free", "cheap", "best", "online", "web", "digital",
+            "pro", "smart", "easy", "fast", "new", "top",
+            # obvious ai combos almost certainly already registered
+            "myai", "aibot", "aiflow", "aidata", "botai", "dataai",
+            "flowai", "aiops", "aisync", "aistack", "getai", "goai",
+        },
         "style": "premium short brandable",
     },
     "fintech": {
@@ -909,12 +941,23 @@ def _score_sld(sld: str, tld: str, style: str, keywords: list[str],
                 generic_penalty += 40
                 break
 
+    # Penalty: obvious word+ai / ai+word patterns (almost certainly taken)
+    _kw_set = set(keywords) | HIGH_VALUE_KEYWORDS
+    if sld.endswith("ai") and len(sld) > 3 and sld[:-2] in _kw_set:
+        generic_penalty += 35
+    elif sld.startswith("ai") and len(sld) > 3 and sld[2:] in _kw_set:
+        generic_penalty += 35
+
+    # Penalty: very short (≤4 chars) names not in invented patterns list
+    if len(sld) <= 4 and sld not in patterns:
+        generic_penalty += 20
+
     adjusted = max(0, int((sb.total - generic_penalty) * _style_multiplier(sld, style)))
 
     kw_hits = [kw for kw in keywords if kw in sld]
     reasons = []
     if sld in patterns:
-        reasons.append("preset pattern")
+        reasons.append("invented pattern")
     if kw_hits:
         reasons.append(f"keyword: {', '.join(kw_hits[:2])}")
     if len(sld) <= 5:
@@ -922,7 +965,7 @@ def _score_sld(sld: str, tld: str, style: str, keywords: list[str],
     elif len(sld) <= 8:
         reasons.append("short")
     if generic_penalty:
-        reasons.append("affix-only — penalised")
+        reasons.append("penalised" if generic_penalty >= 35 else "affix-only — penalised")
     if not kw_hits and sld not in patterns:
         reasons.append("no keyword signal")
 

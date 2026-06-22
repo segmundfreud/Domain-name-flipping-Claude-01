@@ -604,8 +604,29 @@ def generate_domains(
     return scored[:count]
 
 
+def _availability_label(sld: str, available: Optional[bool]) -> str:
+    """Return a human label combining DNS result with domain characteristics."""
+    # Single short dictionary words on .com are almost always registered
+    likely_premium = len(sld) <= 5 and sld.isalpha()
+    if available is None:
+        return "unknown"
+    if available:
+        if likely_premium:
+            return "likely premium/taken — verify"
+        return "available"
+    else:
+        if likely_premium:
+            return "likely premium/taken"
+        return "taken"
+
+
 def cmd_generate(args):
+    import time
+
     tld = args.tld if args.tld.startswith(".") else f".{args.tld}"
+    raw_check = getattr(args, "check", None)
+    do_check = raw_check is not None and str(raw_check).lower() not in ("false", "0", "no")
+
     results = generate_domains(
         niche=args.niche,
         market=args.market,
@@ -614,6 +635,22 @@ def cmd_generate(args):
         tld=tld,
     )
 
+    # Availability checking with small delay to avoid DNS spam
+    if do_check:
+        print(f"\n  Checking availability for {len(results)} domains...", flush=True)
+        for i, r in enumerate(results):
+            avail, _ = check_availability(r["domain"])
+            r["available"] = avail
+            r["avail_label"] = _availability_label(r["sld"], avail)
+            # Print a dot every 5 checks so the user sees progress
+            if (i + 1) % 5 == 0:
+                print(f"  {i + 1}/{len(results)} checked...", flush=True)
+            time.sleep(0.3)
+    else:
+        for r in results:
+            r["available"] = None
+            r["avail_label"] = "not checked"
+
     if args.json:
         print(json.dumps(results, indent=2))
         return
@@ -621,21 +658,48 @@ def cmd_generate(args):
     def c(text, code=""):
         return text if args.no_color else f"{code}{text}{RESET}"
 
+    AVAIL_COLORS = {
+        "available":                    "\033[92m",  # green
+        "taken":                        "\033[91m",  # red
+        "likely premium/taken":         "\033[91m",  # red
+        "likely premium/taken — verify": "\033[93m", # yellow
+        "unknown":                      "\033[90m",  # grey
+        "not checked":                  "\033[90m",  # grey
+    }
+
     print()
     print(c(f"  Generated domains  |  niche: {args.niche}  |  market: {args.market}  |  style: {args.style}", BOLD))
     print()
-    header = f"  {'Domain':<22} {'Score':<7} {'Tier':<10} {'Len':<5} Reason"
-    print(c(header, BOLD))
-    print("  " + "-" * 80)
-    for r in results:
-        tier_col = TIER_COLORS.get(r["tier"], "")
-        print(
-            f"  {r['domain']:<22} "
-            f"{r['score']:<7} "
-            f"{c(r['tier'], tier_col):<20} "
-            f"{r['length']:<5} "
-            f"{r['reason']}"
-        )
+
+    if do_check:
+        header = f"  {'Domain':<22} {'Availability':<28} {'Score':<7} {'Len':<5} Reason"
+        print(c(header, BOLD))
+        print("  " + "-" * 90)
+        for r in results:
+            label = r["avail_label"]
+            avail_col = AVAIL_COLORS.get(label, "")
+            tier_col = TIER_COLORS.get(r["tier"], "")
+            print(
+                f"  {r['domain']:<22} "
+                f"{c(label, avail_col):<38} "
+                f"{r['score']:<7} "
+                f"{r['length']:<5} "
+                f"{r['reason']}"
+            )
+    else:
+        header = f"  {'Domain':<22} {'Score':<7} {'Tier':<10} {'Len':<5} Reason"
+        print(c(header, BOLD))
+        print("  " + "-" * 80)
+        for r in results:
+            tier_col = TIER_COLORS.get(r["tier"], "")
+            print(
+                f"  {r['domain']:<22} "
+                f"{r['score']:<7} "
+                f"{c(r['tier'], tier_col):<20} "
+                f"{r['length']:<5} "
+                f"{r['reason']}"
+            )
+
     print(f"\n  {len(results)} domains generated.\n")
 
 
@@ -687,6 +751,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.add_argument("--style", default="premium short", help='Style hint, e.g. "premium short"')
     p_gen.add_argument("--count", type=int, default=20, help="Number of results to show (default: 20)")
     p_gen.add_argument("--tld", default=".com", help="TLD to use (default: .com)")
+    p_gen.add_argument("--check", nargs="?", const="true", default=None,
+                       help='Check DNS availability for each generated domain (--check or --check true)')
     _add_common(p_gen)
     p_gen.set_defaults(func=cmd_generate)
 

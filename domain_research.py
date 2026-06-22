@@ -380,48 +380,63 @@ def cmd_bulk(args):
 # Domain generator
 # ---------------------------------------------------------------------------
 
-# Niche synonym map — extend as needed
+# Strong niche tokens per keyword — only specific, brandable words
 NICHE_SYNONYMS: dict[str, list[str]] = {
-    "barber":   ["barber", "blade", "fade", "trim", "clipper", "razor", "groom", "shave"],
-    "shop":     ["shop", "studio", "lounge", "spot", "den", "place", "room"],
-    "hair":     ["hair", "cut", "style", "curl", "mane", "lock"],
-    "salon":    ["salon", "style", "beauty", "glam", "chic", "lux"],
-    "food":     ["food", "eat", "bite", "taste", "chef", "dish", "meal", "feast"],
-    "cafe":     ["cafe", "brew", "bean", "roast", "cup", "drip", "sip"],
-    "fitness":  ["fit", "gym", "lift", "strong", "flex", "burn", "sweat"],
-    "tech":     ["tech", "code", "dev", "byte", "stack", "logic", "digital"],
-    "real":     ["real", "home", "nest", "dwelling", "property", "abode"],
-    "estate":   ["estate", "home", "nest", "realty", "haven", "land"],
-    "travel":   ["travel", "trip", "roam", "voyage", "trek", "fly", "wander"],
-    "fashion":  ["fashion", "style", "vogue", "wear", "thread", "drip", "look"],
-    "law":      ["law", "legal", "counsel", "justice", "firm", "rights"],
-    "health":   ["health", "care", "well", "vital", "cure", "med", "life"],
-    "pet":      ["pet", "paw", "tail", "fur", "bark", "vet", "critter"],
-    "photo":    ["photo", "lens", "frame", "shot", "pixel", "snap", "click"],
-    "music":    ["music", "beat", "sound", "tune", "track", "wave", "note"],
-    "market":   ["market", "trade", "deal", "store", "hub", "cart", "bazaar"],
+    "barber":  ["barber", "blade", "fade", "trim", "razor", "groom", "shave", "cut",
+                "clip", "beard", "chair", "style"],
+    "shop":    ["studio", "craft", "works", "lab"],
+    "hair":    ["cut", "style", "fade", "blade", "trim", "clip"],
+    "salon":   ["style", "groom", "blade", "trim", "shave"],
+    "food":    ["food", "eat", "bite", "chef", "dish", "feast", "taste"],
+    "cafe":    ["cafe", "brew", "bean", "roast", "sip", "drip"],
+    "fitness": ["fit", "lift", "flex", "burn", "sweat", "strong"],
+    "gym":     ["gym", "lift", "flex", "burn", "rep", "iron"],
+    "tech":    ["tech", "code", "dev", "byte", "stack", "logic"],
+    "real":    ["home", "nest", "realty", "haven", "land"],
+    "estate":  ["home", "nest", "realty", "haven", "property"],
+    "travel":  ["trip", "roam", "trek", "fly", "voyage", "wander"],
+    "fashion": ["style", "wear", "thread", "vogue", "look", "drip"],
+    "law":     ["law", "legal", "counsel", "firm", "rights", "justice"],
+    "health":  ["care", "well", "vital", "cure", "med", "life"],
+    "pet":     ["paw", "tail", "fur", "bark", "vet"],
+    "photo":   ["lens", "frame", "shot", "pixel", "snap", "click"],
+    "music":   ["beat", "sound", "tune", "track", "wave", "note"],
+    "market":  ["trade", "deal", "cart", "bazaar"],
 }
 
+# Tokens that are too generic to stand alone — penalised unless paired with a strong token
+WEAK_STANDALONE = {"shop", "room", "den", "place", "spot", "store", "thing", "stuff",
+                   "lab", "hub", "co", "studio", "craft", "works", "house", "club"}
+
+# Invented brandable patterns: (root, suffix) → combined word
+INVENTED_PATTERNS: list[str] = [
+    "trimora", "fadeo", "bladely", "groomly", "razorly",
+    "clipora", "beardio", "cutiva", "shavora", "fadeio",
+    "trimco", "bladeco", "groomco", "razorco", "cutlab",
+    "fadehub", "trimhub", "groomhub", "bladehub", "cliplab",
+    "casatrim", "casafade", "casagroom", "casablade", "casacut",
+    "trimcasa", "fadecasa", "groomcasa",
+]
+
 BRANDABLE_PREFIXES = [
-    "go", "my", "get", "be", "the", "top", "pro", "vip", "one",
-    "try", "now", "new", "we", "hey", "hi", "just", "ultra",
+    "go", "my", "get", "pro", "prime", "urban", "casa",
 ]
 
 BRANDABLE_SUFFIXES = [
-    "hub", "pro", "hq", "lab", "co", "zone", "spot", "club",
-    "plus", "now", "bay", "base", "way", "box", "ify", "ly",
-    "app", "nest", "den", "house", "place", "point", "works",
+    "lab", "studio", "co", "hub", "house", "works", "club", "craft",
 ]
 
 
 def _extract_words(phrase: str) -> list[str]:
-    """Split a phrase into lowercase tokens, expand via synonym map."""
+    """Split phrase into tokens and expand via niche synonym map."""
     tokens = re.findall(r"[a-z]+", phrase.lower())
     expanded: list[str] = []
     for tok in tokens:
-        expanded.append(tok)
+        # Only add the raw token if it's not a weak standalone
+        if tok not in WEAK_STANDALONE:
+            expanded.append(tok)
         expanded.extend(NICHE_SYNONYMS.get(tok, []))
-    return list(dict.fromkeys(expanded))  # deduplicate, preserve order
+    return list(dict.fromkeys(expanded))
 
 
 def _market_tokens(market: str) -> list[str]:
@@ -430,7 +445,6 @@ def _market_tokens(market: str) -> list[str]:
     result = []
     for t in tokens:
         result.append(t)
-        # also add first 4-5 chars if the token is long
         if len(t) > 5:
             result.append(t[:4])
             result.append(t[:5])
@@ -438,26 +452,75 @@ def _market_tokens(market: str) -> list[str]:
 
 
 def _is_valid_sld(sld: str, max_len: int) -> bool:
-    return (
-        sld.isalpha()
-        and len(sld) <= max_len
-        and len(sld) >= 3
-    )
+    return sld.isalpha() and 3 <= len(sld) <= max_len
+
+
+def _generic_penalty(sld: str) -> int:
+    """Return a score penalty for names that are too vague."""
+    penalty = 0
+    if sld in WEAK_STANDALONE:
+        penalty += 55
+    # Penalise prefix+suffix combos with no niche word (e.g. golab, getlab, prolab)
+    pure_affixes = {"lab", "hub", "co", "studio", "craft", "works", "house", "club",
+                    "shop", "room", "den", "place", "spot", "store", "pro", "go",
+                    "get", "my", "prime", "urban", "casa"}
+    prefixes = {"go", "get", "my", "pro", "prime", "urban", "casa"}
+    for pre in prefixes:
+        if sld.startswith(pre):
+            remainder = sld[len(pre):]
+            if remainder in pure_affixes:
+                penalty += 45
+                break
+    # Penalise combos where BOTH parts are weak (e.g. labhub, labco, lablab)
+    suffix_only = {"lab", "hub", "co", "studio", "craft", "works", "house", "club",
+                   "shop", "room", "den", "place", "spot", "store"}
+    if len(sld) >= 5:
+        for sw in suffix_only:
+            remainder = sld[: len(sld) - len(sw)]
+            if sld.endswith(sw) and remainder in suffix_only:
+                penalty += 30
+                break
+    return penalty
 
 
 def _style_multiplier(sld: str, style: str) -> float:
-    """Nudge score based on style hint."""
     style = style.lower()
     bonus = 1.0
     if "short" in style and len(sld) <= 6:
         bonus += 0.3
     if "premium" in style and len(sld) <= 8:
         bonus += 0.2
-    if "brand" in style or "catchy" in style:
-        # reward short pronounceable names
-        if len(sld) <= 7:
-            bonus += 0.25
+    if ("brand" in style or "catchy" in style) and len(sld) <= 7:
+        bonus += 0.25
     return bonus
+
+
+def _explain(sld: str, niche_words: list[str], market_words: list[str]) -> str:
+    """Generate a short reason string for why a domain scored well or poorly."""
+    reasons = []
+
+    strong_barber = {"trim", "fade", "blade", "groom", "razor", "cut", "clip",
+                     "shave", "barber", "beard", "chair", "style"}
+    niche_hits = [w for w in strong_barber if w in sld]
+    market_hits = [w for w in market_words if w in sld and len(w) >= 4]
+    invented = any(sld == p for p in INVENTED_PATTERNS)
+
+    if invented:
+        reasons.append("invented brandable word")
+    if niche_hits:
+        reasons.append(f"niche token: {', '.join(niche_hits)}")
+    if market_hits:
+        reasons.append(f"market token: {', '.join(market_hits)}")
+    if len(sld) <= 5:
+        reasons.append("very short")
+    elif len(sld) <= 7:
+        reasons.append("short")
+    if sld in WEAK_STANDALONE:
+        reasons.append("too generic — penalised")
+    if not niche_hits and not invented and not market_hits:
+        reasons.append("no strong niche signal")
+
+    return "; ".join(reasons) if reasons else "generic combination"
 
 
 def generate_domains(
@@ -484,7 +547,7 @@ def generate_domains(
         for suf in BRANDABLE_SUFFIXES:
             candidates.add(nw + suf)
 
-    # Strategy 3: market token + niche word
+    # Strategy 3: market token + niche word (both directions)
     for mw in market_words:
         for nw in niche_words:
             candidates.add(mw + nw)
@@ -500,19 +563,24 @@ def generate_domains(
         for suf in BRANDABLE_SUFFIXES:
             candidates.add(mw + suf)
 
-    # Strategy 6: niche word alone (if short enough)
+    # Strategy 6: niche word alone
     for nw in niche_words:
         candidates.add(nw)
+
+    # Strategy 7: invented brandable patterns
+    for pat in INVENTED_PATTERNS:
+        candidates.add(pat)
 
     # Filter
     valid = [s for s in candidates if _is_valid_sld(s, max_sld_len)]
 
-    # Score
+    # Score with penalty and style multiplier
     scored = []
     for sld in valid:
         domain = sld + tld
         sb = score_domain(domain)
-        adjusted = int(sb.total * _style_multiplier(sld, style))
+        penalty = _generic_penalty(sld)
+        adjusted = max(0, int((sb.total - penalty) * _style_multiplier(sld, style)))
         scored.append({
             "domain": domain,
             "sld": sld,
@@ -520,6 +588,7 @@ def generate_domains(
             "length": len(sld),
             "score": adjusted,
             "tier": sb.tier,
+            "reason": _explain(sld, niche_words, market_words),
             "score_breakdown": {
                 "length": sb.length,
                 "tld": sb.tld,
@@ -527,6 +596,7 @@ def generate_domains(
                 "pronounceable": sb.pronounceable,
                 "hyphens": sb.hyphens,
                 "numbers": sb.numbers,
+                "generic_penalty": -penalty,
             },
         })
 
@@ -554,16 +624,17 @@ def cmd_generate(args):
     print()
     print(c(f"  Generated domains  |  niche: {args.niche}  |  market: {args.market}  |  style: {args.style}", BOLD))
     print()
-    header = f"  {'Domain':<30} {'Score':<7} {'Tier':<10} {'Len'}"
+    header = f"  {'Domain':<22} {'Score':<7} {'Tier':<10} {'Len':<5} Reason"
     print(c(header, BOLD))
-    print("  " + "-" * 58)
+    print("  " + "-" * 80)
     for r in results:
         tier_col = TIER_COLORS.get(r["tier"], "")
         print(
-            f"  {r['domain']:<30} "
+            f"  {r['domain']:<22} "
             f"{r['score']:<7} "
             f"{c(r['tier'], tier_col):<20} "
-            f"{r['length']}"
+            f"{r['length']:<5} "
+            f"{r['reason']}"
         )
     print(f"\n  {len(results)} domains generated.\n")
 

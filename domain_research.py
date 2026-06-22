@@ -376,6 +376,198 @@ def cmd_bulk(args):
     cmd_check(args)
 
 
+# ---------------------------------------------------------------------------
+# Domain generator
+# ---------------------------------------------------------------------------
+
+# Niche synonym map — extend as needed
+NICHE_SYNONYMS: dict[str, list[str]] = {
+    "barber":   ["barber", "blade", "fade", "trim", "clipper", "razor", "groom", "shave"],
+    "shop":     ["shop", "studio", "lounge", "spot", "den", "place", "room"],
+    "hair":     ["hair", "cut", "style", "curl", "mane", "lock"],
+    "salon":    ["salon", "style", "beauty", "glam", "chic", "lux"],
+    "food":     ["food", "eat", "bite", "taste", "chef", "dish", "meal", "feast"],
+    "cafe":     ["cafe", "brew", "bean", "roast", "cup", "drip", "sip"],
+    "fitness":  ["fit", "gym", "lift", "strong", "flex", "burn", "sweat"],
+    "tech":     ["tech", "code", "dev", "byte", "stack", "logic", "digital"],
+    "real":     ["real", "home", "nest", "dwelling", "property", "abode"],
+    "estate":   ["estate", "home", "nest", "realty", "haven", "land"],
+    "travel":   ["travel", "trip", "roam", "voyage", "trek", "fly", "wander"],
+    "fashion":  ["fashion", "style", "vogue", "wear", "thread", "drip", "look"],
+    "law":      ["law", "legal", "counsel", "justice", "firm", "rights"],
+    "health":   ["health", "care", "well", "vital", "cure", "med", "life"],
+    "pet":      ["pet", "paw", "tail", "fur", "bark", "vet", "critter"],
+    "photo":    ["photo", "lens", "frame", "shot", "pixel", "snap", "click"],
+    "music":    ["music", "beat", "sound", "tune", "track", "wave", "note"],
+    "market":   ["market", "trade", "deal", "store", "hub", "cart", "bazaar"],
+}
+
+BRANDABLE_PREFIXES = [
+    "go", "my", "get", "be", "the", "top", "pro", "vip", "one",
+    "try", "now", "new", "we", "hey", "hi", "just", "ultra",
+]
+
+BRANDABLE_SUFFIXES = [
+    "hub", "pro", "hq", "lab", "co", "zone", "spot", "club",
+    "plus", "now", "bay", "base", "way", "box", "ify", "ly",
+    "app", "nest", "den", "house", "place", "point", "works",
+]
+
+
+def _extract_words(phrase: str) -> list[str]:
+    """Split a phrase into lowercase tokens, expand via synonym map."""
+    tokens = re.findall(r"[a-z]+", phrase.lower())
+    expanded: list[str] = []
+    for tok in tokens:
+        expanded.append(tok)
+        expanded.extend(NICHE_SYNONYMS.get(tok, []))
+    return list(dict.fromkeys(expanded))  # deduplicate, preserve order
+
+
+def _market_tokens(market: str) -> list[str]:
+    """Extract short usable tokens from a market/city name."""
+    tokens = re.findall(r"[a-z]+", market.lower())
+    result = []
+    for t in tokens:
+        result.append(t)
+        # also add first 4-5 chars if the token is long
+        if len(t) > 5:
+            result.append(t[:4])
+            result.append(t[:5])
+    return list(dict.fromkeys(result))
+
+
+def _is_valid_sld(sld: str, max_len: int) -> bool:
+    return (
+        sld.isalpha()
+        and len(sld) <= max_len
+        and len(sld) >= 3
+    )
+
+
+def _style_multiplier(sld: str, style: str) -> float:
+    """Nudge score based on style hint."""
+    style = style.lower()
+    bonus = 1.0
+    if "short" in style and len(sld) <= 6:
+        bonus += 0.3
+    if "premium" in style and len(sld) <= 8:
+        bonus += 0.2
+    if "brand" in style or "catchy" in style:
+        # reward short pronounceable names
+        if len(sld) <= 7:
+            bonus += 0.25
+    return bonus
+
+
+def generate_domains(
+    niche: str,
+    market: str,
+    style: str,
+    count: int,
+    tld: str,
+    max_sld_len: int = 15,
+) -> list[dict]:
+    niche_words = _extract_words(niche)
+    market_words = _market_tokens(market)
+    tld = tld if tld.startswith(".") else f".{tld}"
+
+    candidates: set[str] = set()
+
+    # Strategy 1: prefix + niche word
+    for pre in BRANDABLE_PREFIXES:
+        for nw in niche_words:
+            candidates.add(pre + nw)
+
+    # Strategy 2: niche word + suffix
+    for nw in niche_words:
+        for suf in BRANDABLE_SUFFIXES:
+            candidates.add(nw + suf)
+
+    # Strategy 3: market token + niche word
+    for mw in market_words:
+        for nw in niche_words:
+            candidates.add(mw + nw)
+            candidates.add(nw + mw)
+
+    # Strategy 4: prefix + market token
+    for pre in BRANDABLE_PREFIXES:
+        for mw in market_words:
+            candidates.add(pre + mw)
+
+    # Strategy 5: market token + suffix
+    for mw in market_words:
+        for suf in BRANDABLE_SUFFIXES:
+            candidates.add(mw + suf)
+
+    # Strategy 6: niche word alone (if short enough)
+    for nw in niche_words:
+        candidates.add(nw)
+
+    # Filter
+    valid = [s for s in candidates if _is_valid_sld(s, max_sld_len)]
+
+    # Score
+    scored = []
+    for sld in valid:
+        domain = sld + tld
+        sb = score_domain(domain)
+        adjusted = int(sb.total * _style_multiplier(sld, style))
+        scored.append({
+            "domain": domain,
+            "sld": sld,
+            "tld": tld,
+            "length": len(sld),
+            "score": adjusted,
+            "tier": sb.tier,
+            "score_breakdown": {
+                "length": sb.length,
+                "tld": sb.tld,
+                "keywords": sb.keywords,
+                "pronounceable": sb.pronounceable,
+                "hyphens": sb.hyphens,
+                "numbers": sb.numbers,
+            },
+        })
+
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:count]
+
+
+def cmd_generate(args):
+    tld = args.tld if args.tld.startswith(".") else f".{args.tld}"
+    results = generate_domains(
+        niche=args.niche,
+        market=args.market,
+        style=args.style,
+        count=args.count,
+        tld=tld,
+    )
+
+    if args.json:
+        print(json.dumps(results, indent=2))
+        return
+
+    def c(text, code=""):
+        return text if args.no_color else f"{code}{text}{RESET}"
+
+    print()
+    print(c(f"  Generated domains  |  niche: {args.niche}  |  market: {args.market}  |  style: {args.style}", BOLD))
+    print()
+    header = f"  {'Domain':<30} {'Score':<7} {'Tier':<10} {'Len'}"
+    print(c(header, BOLD))
+    print("  " + "-" * 58)
+    for r in results:
+        tier_col = TIER_COLORS.get(r["tier"], "")
+        print(
+            f"  {r['domain']:<30} "
+            f"{r['score']:<7} "
+            f"{c(r['tier'], tier_col):<20} "
+            f"{r['length']}"
+        )
+    print(f"\n  {len(results)} domains generated.\n")
+
+
 def _add_common(p):
     p.add_argument("--json", action="store_true", help="Output as JSON")
     p.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
@@ -416,6 +608,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_bulk.add_argument("--whois", action="store_true", help="Also run WHOIS on each domain")
     _add_common(p_bulk)
     p_bulk.set_defaults(func=cmd_bulk)
+
+    # generate
+    p_gen = sub.add_parser("generate", help="Generate and score domain name ideas")
+    p_gen.add_argument("--niche", required=True, help='Business niche, e.g. "barber shop"')
+    p_gen.add_argument("--market", required=True, help='Target market or city, e.g. "Casablanca"')
+    p_gen.add_argument("--style", default="premium short", help='Style hint, e.g. "premium short"')
+    p_gen.add_argument("--count", type=int, default=20, help="Number of results to show (default: 20)")
+    p_gen.add_argument("--tld", default=".com", help="TLD to use (default: .com)")
+    _add_common(p_gen)
+    p_gen.set_defaults(func=cmd_generate)
 
     return parser
 

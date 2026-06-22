@@ -524,8 +524,21 @@ PRESETS: dict[str, dict] = {
             # Invented blends — -era / -pilot families
             "taskera", "flowera", "synera",
             "taskpilot", "datapilot", "flowpilot",
+            # -ava / -ara family
+            "neurava", "flowara", "taskara", "agentara", "promptara",
+            "syncara", "dataara", "inferara",
+            # -ona family
+            "agentona", "taskona", "flowona", "syncona", "inferona",
+            "botona", "neurona", "modona",
+            # -ela family
+            "agentela", "taskela", "flowela", "dataela",
+            # -xo family
+            "agentxo", "taskxo", "flowxo",
+            # -ova family
+            "neurova", "botova", "inferova", "embedova",
             # Other invented words
-            "modelio", "botiva",
+            "modelio", "botiva", "automa", "modela",
+            "promptava", "taskava", "flowava",
         ],
         "avoid": {
             "free", "cheap", "best", "online", "web", "digital",
@@ -1370,6 +1383,71 @@ def _print_taken_section(taken_domains: list[str], tld: str, no_color: bool) -> 
     print()
 
 
+_CREATIVE_SOFT_ENDINGS = (
+    "ora", "iva", "ivo", "ona", "ela", "ara", "ava", "xo",
+    "io", "ly", "nova", "ova", "via", "ura", "ika", "axa",
+)
+_CREATIVE_OBVIOUS_SUFFIXES = ("hq", "ops", "base", "hub", "lab", "co", "bot", "ai")
+_CREATIVE_PREFIXES = {"get", "go", "my", "run", "use", "try", "open", "super"}
+
+
+def _creative_rank_score(sld: str, keywords: list[str], patterns: list[str]) -> float:
+    """
+    Rank score for the 'creative' strategy.
+    Invented brandable blends rank high; obvious keyword combos rank low.
+    """
+    score = 0.0
+    kw_set = set(keywords)
+
+    # Strong boost for explicit invented patterns
+    if sld in patterns:
+        score += 120
+
+    # Boost for soft / brandable endings
+    if any(sld.endswith(e) for e in _CREATIVE_SOFT_ENDINGS):
+        score += 40
+
+    # Boost for consonant-vowel rhythm (pronounceability)
+    vowels = set("aeiou")
+    transitions = sum(
+        1 for i in range(1, len(sld))
+        if (sld[i] in vowels) != (sld[i - 1] in vowels)
+    )
+    score += transitions * 4
+
+    # Boost for 6-9 char sweet spot
+    if 6 <= len(sld) <= 9:
+        score += 25
+    elif len(sld) == 5:
+        score += 10
+
+    # Penalise two or more full keywords mashed together (databot, flowops, botops…)
+    kw_hits = [kw for kw in kw_set if len(kw) >= 3 and kw in sld]
+    if len(kw_hits) >= 2:
+        score -= 45
+
+    # Penalise word+ai / ai+word
+    if (sld.endswith("ai") and sld[:-2] in kw_set) or \
+       (sld.startswith("ai") and sld[2:] in kw_set):
+        score -= 60
+
+    # Penalise common prefix + bare keyword (getbot, godata, myflow…)
+    for pre in _CREATIVE_PREFIXES:
+        if sld.startswith(pre) and sld[len(pre):] in kw_set:
+            score -= 35
+            break
+
+    # Penalise keyword + obvious suffix on a single dictionary stem (datahq, botops…)
+    for suf in _CREATIVE_OBVIOUS_SUFFIXES:
+        if sld.endswith(suf):
+            stem = sld[: -len(suf)]
+            if stem in kw_set:
+                score -= 25
+                break
+
+    return score
+
+
 def cmd_generate(args):
     tld = args.tld if args.tld.startswith(".") else f".{args.tld}"
     raw_check = getattr(args, "check", None)
@@ -1378,9 +1456,12 @@ def cmd_generate(args):
     provider = getattr(args, "availability_provider", "dns")
     preset_name = getattr(args, "preset", None)
 
-    # Resolve --max-checks: explicit arg overrides provider-specific default
+    # Resolve --max-checks and --strategy
     default_max = 50 if provider == "spaceship" else 200
     max_checks: int = getattr(args, "max_checks", None) or default_max
+    strategy: str = getattr(args, "strategy", None) or (
+        "creative" if provider == "spaceship" else "safe"
+    )
 
     # --- Phase 1: generate raw candidates ---
     if preset_name:
@@ -1409,11 +1490,21 @@ def cmd_generate(args):
 
     # --- Phase 3: availability check ---
     if do_check:
-        # Pre-rank locally so we check the most promising names first
-        pre_ranked = sorted(
-            slds,
-            key=lambda s: -_score_sld(s, tld, style, keywords, patterns)["score"],
-        )
+        # Rank candidates according to strategy before slicing to max_checks
+        import random as _random
+        if strategy == "creative":
+            pre_ranked = sorted(
+                slds,
+                key=lambda s: -_creative_rank_score(s, keywords, patterns),
+            )
+        elif strategy == "random":
+            pre_ranked = list(slds)
+            _random.shuffle(pre_ranked)
+        else:  # "safe" — rank by domain value score (original behaviour)
+            pre_ranked = sorted(
+                slds,
+                key=lambda s: -_score_sld(s, tld, style, keywords, patterns)["score"],
+            )
         to_check = pre_ranked[:max_checks]
 
         available_slds: list[str] = []
@@ -1426,7 +1517,7 @@ def cmd_generate(args):
             print(f"  Domains with no DNS record are UNKNOWN — not confirmed available.", flush=True)
             print(f"  Use --availability-provider spaceship for real availability checks.", flush=True)
 
-        print(f"  Checking top {len(to_check)} candidates using {provider}...\n", flush=True)
+        print(f"  Strategy: {strategy}  |  Checking top {len(to_check)} candidates using {provider}...\n", flush=True)
         for i, sld in enumerate(to_check):
             domain = sld + tld
             status, _ = check_availability_provider(domain, provider)
@@ -1572,6 +1663,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.add_argument("--max-checks", type=int, default=None,
                        dest="max_checks",
                        help="Max candidates to check for availability (default: 50 for spaceship, 200 for dns)")
+    p_gen.add_argument("--strategy", default=None,
+                       choices=["safe", "creative", "random"],
+                       help="Candidate ranking before availability check: safe (score-based), "
+                            "creative (invented blends first), random (shuffle). "
+                            "Default: creative for spaceship, safe for dns.")
     _add_common(p_gen)
     p_gen.set_defaults(func=cmd_generate)
 

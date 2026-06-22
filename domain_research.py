@@ -7,6 +7,10 @@ import sys
 import json
 import re
 import subprocess
+import time
+import urllib.request
+import urllib.error
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
@@ -135,6 +139,72 @@ def check_availability(domain: str) -> tuple[bool, str]:
         return False, f"Unknown DNS error ({e})"
     except OSError:
         return False, "Network error during DNS lookup"
+
+
+# ---------------------------------------------------------------------------
+# Spaceship availability provider
+# ---------------------------------------------------------------------------
+# Requires env vars: SPACESHIP_API_KEY and SPACESHIP_API_SECRET
+# Get credentials at: https://www.spaceship.com/api/
+
+SPACESHIP_API_BASE = "https://api.spaceship.com"
+
+
+def check_availability_spaceship(domain: str) -> tuple[bool, str]:
+    """Check domain availability via the Spaceship registrar API."""
+    api_key = os.environ.get("SPACESHIP_API_KEY", "")
+    api_secret = os.environ.get("SPACESHIP_API_SECRET", "")
+    if not api_key or not api_secret:
+        return check_availability(domain)  # fall back to DNS
+
+    payload = json.dumps({"domains": [domain]}).encode()
+    req = urllib.request.Request(
+        f"{SPACESHIP_API_BASE}/v1/domains/check",
+        data=payload,
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/json")
+    req.add_header("X-Api-Key", api_key)
+    req.add_header("X-Api-Secret", api_secret)
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            items = data.get("items", [])
+            if items:
+                avail = items[0].get("available", False)
+                return avail, "Spaceship API"
+            return False, "Spaceship API: empty response"
+    except urllib.error.HTTPError as e:
+        # Fall back to DNS on API errors so the run doesn't abort
+        return check_availability(domain)
+    except Exception:
+        return check_availability(domain)
+
+
+def check_availability_provider(domain: str, provider: str) -> tuple[bool, str]:
+    """Dispatch to the right availability provider."""
+    if provider == "spaceship":
+        return check_availability_spaceship(domain)
+    return check_availability(domain)
+
+
+# ---------------------------------------------------------------------------
+# Trademark / brand-risk blocklist
+# ---------------------------------------------------------------------------
+
+TRADEMARK_BLOCKLIST: set[str] = {
+    "gpt", "openai", "google", "meta", "apple", "tesla", "microsoft",
+    "amazon", "netflix", "twitter", "facebook", "instagram", "tiktok",
+    "spotify", "uber", "stripe", "shopify", "salesforce", "hubspot",
+    "zoom", "slack", "notion", "figma", "canva", "adobe", "oracle",
+    "nvidia", "anthropic", "gemini", "claude", "chatgpt", "copilot",
+    "bard", "deepmind", "perplexity", "mistral",
+}
+
+
+def _has_trademark(sld: str) -> bool:
+    return any(tm in sld for tm in TRADEMARK_BLOCKLIST)
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +802,122 @@ PRESETS: dict[str, dict] = {
 }
 
 
+def _raw_preset_candidates(preset_name: str) -> set[str]:
+    """Return raw SLD candidates for a preset (no filtering, no scoring)."""
+    p = PRESETS[preset_name]
+    keywords = p["keywords"]
+    prefixes = p["prefixes"]
+    suffixes = p["suffixes"]
+    patterns = p["patterns"]
+    max_len = 15
+
+    out: set[str] = set()
+    for pre in prefixes:
+        for kw in keywords:
+            out.add(pre + kw)
+    for kw in keywords:
+        for suf in suffixes:
+            out.add(kw + suf)
+    for i, kw1 in enumerate(keywords):
+        for kw2 in keywords[i + 1:]:
+            c = kw1 + kw2
+            if len(c) <= max_len:
+                out.add(c)
+    for pat in patterns:
+        out.add(pat)
+    for kw in keywords:
+        out.add(kw)
+    return out
+
+
+def _raw_manual_candidates(niche: str, market: str) -> set[str]:
+    """Return raw SLD candidates for manual niche/market mode."""
+    niche_words = _extract_words(niche)
+    market_words = _market_tokens(market)
+    out: set[str] = set()
+    for pre in BRANDABLE_PREFIXES:
+        for nw in niche_words:
+            out.add(pre + nw)
+    for nw in niche_words:
+        for suf in BRANDABLE_SUFFIXES:
+            out.add(nw + suf)
+    for mw in market_words:
+        for nw in niche_words:
+            out.add(mw + nw)
+            out.add(nw + mw)
+    for pre in BRANDABLE_PREFIXES:
+        for mw in market_words:
+            out.add(pre + mw)
+    for mw in market_words:
+        for suf in BRANDABLE_SUFFIXES:
+            out.add(mw + suf)
+    for nw in niche_words:
+        out.add(nw)
+    for pat in INVENTED_PATTERNS:
+        out.add(pat)
+    return out
+
+
+def _filter_candidates(candidates: set[str], max_sld_len: int = 15) -> list[str]:
+    """Apply basic local filters: length, alpha-only, no trademarks, dedup."""
+    result = []
+    for sld in candidates:
+        if not sld.isalpha():
+            continue
+        if not (3 <= len(sld) <= max_sld_len):
+            continue
+        if _has_trademark(sld):
+            continue
+        result.append(sld)
+    return result
+
+
+def _score_sld(sld: str, tld: str, style: str, keywords: list[str],
+               patterns: list[str]) -> dict:
+    """Score a single SLD and return a result dict."""
+    domain = sld + tld
+    sb = score_domain(domain)
+
+    avoid = set()  # populated per preset in caller if needed
+    pure_affixes = set(BRANDABLE_SUFFIXES) | set(BRANDABLE_PREFIXES)
+
+    # Penalty: affix-only combo (no real keyword)
+    generic_penalty = 0
+    for pre in BRANDABLE_PREFIXES:
+        if sld.startswith(pre):
+            remainder = sld[len(pre):]
+            if remainder in pure_affixes and remainder not in keywords:
+                generic_penalty += 40
+                break
+
+    adjusted = max(0, int((sb.total - generic_penalty) * _style_multiplier(sld, style)))
+
+    kw_hits = [kw for kw in keywords if kw in sld]
+    reasons = []
+    if sld in patterns:
+        reasons.append("preset pattern")
+    if kw_hits:
+        reasons.append(f"keyword: {', '.join(kw_hits[:2])}")
+    if len(sld) <= 5:
+        reasons.append("very short")
+    elif len(sld) <= 8:
+        reasons.append("short")
+    if generic_penalty:
+        reasons.append("affix-only — penalised")
+    if not kw_hits and sld not in patterns:
+        reasons.append("no keyword signal")
+
+    return {
+        "domain": domain,
+        "sld": sld,
+        "tld": tld,
+        "length": len(sld),
+        "score": adjusted,
+        "tier": sb.tier,
+        "reason": "; ".join(reasons) if reasons else "generic",
+    }
+
+
 def generate_from_preset(
     preset_name: str,
     count: int,
@@ -1087,7 +1273,6 @@ def _availability_label(sld: str, available: Optional[bool]) -> str:
 
 
 def _run_availability_checks(results: list[dict]) -> None:
-    import time
     print(f"\n  Checking availability for {len(results)} domains...", flush=True)
     for i, r in enumerate(results):
         avail, _ = check_availability(r["domain"])
@@ -1098,95 +1283,120 @@ def _run_availability_checks(results: list[dict]) -> None:
         time.sleep(0.3)
 
 
-def _print_generate_table(results: list[dict], title: str, do_check: bool,
-                          no_color: bool) -> None:
+def _print_scored_table(results: list[dict], title: str, no_color: bool) -> None:
     def c(text, code=""):
         return text if no_color else f"{code}{text}{RESET}"
-
-    AVAIL_COLORS = {
-        "available":                     "\033[92m",
-        "taken":                         "\033[91m",
-        "likely premium/taken":          "\033[91m",
-        "likely premium/taken — verify": "\033[93m",
-        "unknown":                       "\033[90m",
-        "not checked":                   "\033[90m",
-    }
-
     print()
     print(c(f"  {title}", BOLD))
     print()
+    header = f"  {'Domain':<24} {'Score':<7} {'Tier':<10} {'Len':<5} Reason"
+    print(c(header, BOLD))
+    print("  " + "-" * 82)
+    for r in results:
+        tier_col = TIER_COLORS.get(r["tier"], "")
+        print(
+            f"  {r['domain']:<24} "
+            f"{r['score']:<7} "
+            f"{c(r['tier'], tier_col):<20} "
+            f"{r['length']:<5} "
+            f"{r['reason']}"
+        )
+    print()
 
-    if do_check:
-        header = f"  {'Domain':<24} {'Availability':<28} {'Score':<7} {'Len':<5} Reason"
-        print(c(header, BOLD))
-        print("  " + "-" * 92)
-        for r in results:
-            label = r.get("avail_label", "not checked")
-            avail_col = AVAIL_COLORS.get(label, "")
-            print(
-                f"  {r['domain']:<24} "
-                f"{c(label, avail_col):<38} "
-                f"{r['score']:<7} "
-                f"{r['length']:<5} "
-                f"{r['reason']}"
-            )
-    else:
-        header = f"  {'Domain':<24} {'Score':<7} {'Tier':<10} {'Len':<5} Reason"
-        print(c(header, BOLD))
-        print("  " + "-" * 82)
-        for r in results:
-            tier_col = TIER_COLORS.get(r["tier"], "")
-            print(
-                f"  {r['domain']:<24} "
-                f"{r['score']:<7} "
-                f"{c(r['tier'], tier_col):<20} "
-                f"{r['length']:<5} "
-                f"{r['reason']}"
-            )
 
-    print(f"\n  {len(results)} domains generated.\n")
+def _print_taken_section(taken_domains: list[str], tld: str, no_color: bool) -> None:
+    def c(text, code=""):
+        return text if no_color else f"{code}{text}{RESET}"
+    print()
+    print(c(f"  --- Taken / Inspiration ({len(taken_domains)} domains, unscored) ---", BOLD))
+    print()
+    for i, domain in enumerate(sorted(taken_domains, key=len)):
+        print(f"  {domain}")
+    print()
 
 
 def cmd_generate(args):
     tld = args.tld if args.tld.startswith(".") else f".{args.tld}"
     raw_check = getattr(args, "check", None)
     do_check = raw_check is not None and str(raw_check).lower() not in ("false", "0", "no")
+    show_taken = getattr(args, "show_taken", False)
+    provider = getattr(args, "availability_provider", "dns")
     preset_name = getattr(args, "preset", None)
 
+    # --- Phase 1: generate raw candidates ---
     if preset_name:
         if preset_name not in PRESETS:
-            print(f"  Unknown preset '{preset_name}'. Available presets:", file=sys.stderr)
-            for k, v in PRESETS.items():
-                print(f"    {k:<22} (buyer intent: {v['buyer_intent']})", file=sys.stderr)
+            print(f"  Unknown preset '{preset_name}'. Available: {', '.join(PRESETS)}", file=sys.stderr)
             sys.exit(1)
-        results = generate_from_preset(preset_name, args.count, tld)
-        title = f"Preset: {preset_name}  |  buyer intent: {PRESETS[preset_name]['buyer_intent']}  |  tld: {tld}"
+        p = PRESETS[preset_name]
+        raw = _raw_preset_candidates(preset_name)
+        keywords = p["keywords"]
+        patterns = p["patterns"]
+        style = p["style"]
+        title = f"Preset: {preset_name}  |  buyer intent: {p['buyer_intent']}  |  tld: {tld}"
     else:
-        # Manual mode — niche/market/style required
         if not getattr(args, "niche", None) or not getattr(args, "market", None):
             print("  Error: --niche and --market are required when not using --preset", file=sys.stderr)
             sys.exit(1)
-        results = generate_domains(
-            niche=args.niche,
-            market=args.market,
-            style=getattr(args, "style", "premium short"),
-            count=args.count,
-            tld=tld,
-        )
-        title = f"niche: {args.niche}  |  market: {args.market}  |  tld: {tld}"
+        raw = _raw_manual_candidates(args.niche, args.market)
+        keywords = _extract_words(args.niche)
+        patterns = INVENTED_PATTERNS
+        style = getattr(args, "style", "premium short")
+        title = f"niche: {args.niche}  |  market: {getattr(args, 'market', '')}  |  tld: {tld}"
 
+    # --- Phase 2: basic local filter (no scoring yet) ---
+    slds = _filter_candidates(raw, max_sld_len=15)
+
+    # --- Phase 3: availability check first ---
     if do_check:
-        _run_availability_checks(results)
+        available_slds: list[str] = []
+        taken_domains: list[str] = []
+        total = len(slds)
+        print(f"\n  Checking availability for {total} candidates via {provider}...", flush=True)
+        for i, sld in enumerate(slds):
+            domain = sld + tld
+            avail, _ = check_availability_provider(domain, provider)
+            if avail:
+                available_slds.append(sld)
+            else:
+                taken_domains.append(domain)
+            if (i + 1) % 10 == 0:
+                print(f"  {i + 1}/{total} checked — {len(available_slds)} available so far...",
+                      flush=True)
+            time.sleep(0.3)
+
+        print(f"  Done. {len(available_slds)} available, {len(taken_domains)} taken.\n", flush=True)
+
+        # --- Phase 4: score only available domains ---
+        scored = [_score_sld(sld, tld, style, keywords, patterns) for sld in available_slds]
+        scored.sort(key=lambda x: -x["score"])
+        scored = scored[:args.count]
+
+        if args.json:
+            output = {"available": scored, "taken": taken_domains}
+            print(json.dumps(output, indent=2))
+            return
+
+        if scored:
+            _print_scored_table(scored, f"Available Domains — {title}", args.no_color)
+        else:
+            print("  No available domains found in this run.\n")
+
+        if show_taken and taken_domains:
+            _print_taken_section(taken_domains, tld, args.no_color)
+
     else:
-        for r in results:
-            r["available"] = None
-            r["avail_label"] = "not checked"
+        # --- No availability check: score all candidates ---
+        scored = [_score_sld(sld, tld, style, keywords, patterns) for sld in slds]
+        scored.sort(key=lambda x: -x["score"])
+        scored = scored[:args.count]
 
-    if args.json:
-        print(json.dumps(results, indent=2))
-        return
+        if args.json:
+            print(json.dumps(scored, indent=2))
+            return
 
-    _print_generate_table(results, title, do_check, args.no_color)
+        _print_scored_table(scored, title, args.no_color)
+        print(f"  {len(scored)} domains generated (availability not checked).\n")
 
 
 def _add_common(p):
@@ -1233,14 +1443,21 @@ def build_parser() -> argparse.ArgumentParser:
     # generate
     p_gen = sub.add_parser("generate", help="Generate and score domain name ideas")
     p_gen.add_argument("--preset", default=None,
-                       help=f'Use a market preset. Available: {", ".join(PRESETS)}')
+                       help=f'Market preset. Available: {", ".join(PRESETS)}')
     p_gen.add_argument("--niche", default=None, help='Manual mode: business niche, e.g. "barber shop"')
     p_gen.add_argument("--market", default=None, help='Manual mode: target market or city')
     p_gen.add_argument("--style", default="premium short", help='Style hint (manual mode)')
     p_gen.add_argument("--count", type=int, default=20, help="Number of results to show (default: 20)")
     p_gen.add_argument("--tld", default=".com", help="TLD to use (default: .com)")
     p_gen.add_argument("--check", nargs="?", const="true", default=None,
-                       help="Check DNS availability for each generated domain")
+                       help="Check availability before scoring (recommended)")
+    p_gen.add_argument("--availability-provider", default="dns",
+                       choices=["dns", "spaceship"],
+                       dest="availability_provider",
+                       help="Availability provider: dns (default) or spaceship (requires API creds)")
+    p_gen.add_argument("--show-taken", action="store_true", default=False,
+                       dest="show_taken",
+                       help="Show taken domains in a separate unscored inspiration section")
     _add_common(p_gen)
     p_gen.set_defaults(func=cmd_generate)
 

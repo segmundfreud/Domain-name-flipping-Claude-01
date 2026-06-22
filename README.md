@@ -184,9 +184,19 @@ The generator automatically removes any domain containing high-risk trademark te
 
 ## Availability Note
 
-DNS-based availability is a heuristic — a failed DNS lookup suggests a domain *may* be
-available, but always confirm with a registrar (Namecheap, GoDaddy, Spaceship) before purchasing.
-The Spaceship API provider gives more accurate results when credentials are configured.
+**DNS mode (`--availability-provider dns`, the default):**
+- DNS can only tell you if a domain *resolves* (i.e., is almost certainly registered).
+- If no DNS record is found, the domain is marked **unknown** — NOT available.
+- DNS mode **never** confirms a domain is available. It only filters out obvious registrations.
+- Output says "Unknown Candidates to Verify" and domains are **not scored**.
+- Always verify unknown domains at a registrar before purchasing.
+
+**Spaceship API mode (`--availability-provider spaceship`):**
+- The only mode that can **confirm** a domain is available.
+- Returns: `available`, `taken`, or `unknown`.
+- Only confirmed available domains are scored and shown in results.
+- Requires `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET` environment variables.
+- Falls back to DNS if credentials are missing.
 
 ---
 

@@ -121,24 +121,24 @@ def score_domain(domain: str) -> ScoreBreakdown:
 # Availability check via DNS
 # ---------------------------------------------------------------------------
 
-def check_availability(domain: str) -> tuple[bool, str]:
+def check_availability(domain: str) -> tuple[str, str]:
     """
-    Returns (available, note).
-    Available means DNS resolution failed (NXDOMAIN-like) — the domain likely
-    isn't registered. This is a heuristic; always verify with a registrar.
+    DNS heuristic. Returns (status, note) where status is:
+      "taken"   — domain resolves; almost certainly registered
+      "unknown" — no DNS record found, or lookup error
+    DNS can NEVER confirm a domain is available — only Spaceship API can do that.
     """
     try:
         socket.setdefaulttimeout(5)
         socket.getaddrinfo(domain, None)
-        return False, "Registered (resolves via DNS)"
+        return "taken", "Resolves via DNS — likely registered"
     except socket.gaierror as e:
         code = e.args[0]
-        # NXDOMAIN / no such host
         if code in (socket.EAI_NONAME, -2, -3, 11001, 11004):
-            return True, "Likely available (no DNS record found)"
-        return False, f"Unknown DNS error ({e})"
+            return "unknown", "No DNS record found — verify with a registrar"
+        return "unknown", f"DNS error ({e}) — verify with a registrar"
     except OSError:
-        return False, "Network error during DNS lookup"
+        return "unknown", "Network error — verify with a registrar"
 
 
 # ---------------------------------------------------------------------------
@@ -150,12 +150,18 @@ def check_availability(domain: str) -> tuple[bool, str]:
 SPACESHIP_API_BASE = "https://api.spaceship.com"
 
 
-def check_availability_spaceship(domain: str) -> tuple[bool, str]:
-    """Check domain availability via the Spaceship registrar API."""
+def check_availability_spaceship(domain: str) -> tuple[str, str]:
+    """
+    Check domain availability via the Spaceship registrar API.
+    Returns (status, note) where status is one of:
+      "available" — confirmed available by Spaceship
+      "taken"     — confirmed registered
+      "unknown"   — API error or no credentials (falls back to DNS heuristic)
+    """
     api_key = os.environ.get("SPACESHIP_API_KEY", "")
     api_secret = os.environ.get("SPACESHIP_API_SECRET", "")
     if not api_key or not api_secret:
-        return check_availability(domain)  # fall back to DNS
+        return check_availability(domain)  # fall back to DNS (returns "taken"/"unknown")
 
     payload = json.dumps({"domains": [domain]}).encode()
     req = urllib.request.Request(
@@ -172,18 +178,19 @@ def check_availability_spaceship(domain: str) -> tuple[bool, str]:
             data = json.loads(resp.read().decode())
             items = data.get("items", [])
             if items:
-                avail = items[0].get("available", False)
-                return avail, "Spaceship API"
-            return False, "Spaceship API: empty response"
-    except urllib.error.HTTPError as e:
-        # Fall back to DNS on API errors so the run doesn't abort
+                item = items[0]
+                if item.get("available", False):
+                    return "available", "Spaceship API"
+                return "taken", "Spaceship API"
+            return "unknown", "Spaceship API: empty response"
+    except urllib.error.HTTPError:
         return check_availability(domain)
     except Exception:
         return check_availability(domain)
 
 
-def check_availability_provider(domain: str, provider: str) -> tuple[bool, str]:
-    """Dispatch to the right availability provider."""
+def check_availability_provider(domain: str, provider: str) -> tuple[str, str]:
+    """Dispatch to the right availability provider. Returns (status, note)."""
     if provider == "spaceship":
         return check_availability_spaceship(domain)
     return check_availability(domain)
@@ -244,13 +251,13 @@ def _parse_whois_fields(raw: str) -> dict:
 
 def analyze_domain(domain: str, whois: bool = False) -> dict:
     domain = domain.lower().strip()
-    avail, avail_note = check_availability(domain)
+    status, avail_note = check_availability(domain)
     score = score_domain(domain)
     sld, tld = _split_sld(domain)
 
     result = {
         "domain": domain,
-        "available": avail,
+        "available": status,
         "availability_note": avail_note,
         "sld": sld,
         "tld": tld,
@@ -302,9 +309,16 @@ def print_single(result: dict, no_color: bool = False) -> None:
 
     print()
     print(c(f"  Domain : {result['domain']}", BOLD))
-    avail_label = "YES (likely available)" if result["available"] else "NO (registered)"
-    avail_color = "\033[92m" if result["available"] else "\033[91m"
-    print(f"  Available : {c(avail_label, avail_color)}")
+    _status = result["available"]
+    if _status == "available":
+        avail_label, avail_color = "YES (confirmed available)", "\033[92m"
+    elif _status == "taken":
+        avail_label, avail_color = "NO (registered)", "\033[91m"
+    elif _status is None:
+        avail_label, avail_color = "(not checked)", "\033[90m"
+    else:
+        avail_label, avail_color = "UNKNOWN — verify with registrar", "\033[93m"
+    print(f"  Available : {c(avail_label, avail_color)}  (DNS heuristic — verify with a registrar)" if _status == "unknown" else f"  Available : {c(avail_label, avail_color)}")
     print(f"  Note      : {result['availability_note']}")
     print()
 
@@ -342,8 +356,13 @@ def print_bulk_table(results: list[dict], no_color: bool = False) -> None:
     print(c(header, BOLD))
     print("-" * 75)
     for r in sorted(results, key=lambda x: -x["score"]):
-        avail = "YES" if r["available"] else "no"
-        avail_col = "\033[92m" if r["available"] else "\033[91m"
+        _s = r["available"]
+        if _s == "available":
+            avail, avail_col = "YES", "\033[92m"
+        elif _s == "taken":
+            avail, avail_col = "no", "\033[91m"
+        else:
+            avail, avail_col = "?", "\033[93m"
         tier_col = TIER_COLORS.get(r["tier"], "")
         print(
             f"{r['domain']:<35} "
@@ -1256,28 +1275,21 @@ def generate_domains(
     return scored[:count]
 
 
-def _availability_label(sld: str, available: Optional[bool]) -> str:
-    """Return a human label combining DNS result with domain characteristics."""
-    # Single short dictionary words on .com are almost always registered
-    likely_premium = len(sld) <= 5 and sld.isalpha()
-    if available is None:
-        return "unknown"
-    if available:
-        if likely_premium:
-            return "likely premium/taken — verify"
+def _availability_label(sld: str, status: Optional[str]) -> str:
+    """Return a human label from availability status string."""
+    if status == "available":
         return "available"
-    else:
-        if likely_premium:
-            return "likely premium/taken"
+    if status == "taken":
         return "taken"
+    return "unknown — verify with registrar"
 
 
 def _run_availability_checks(results: list[dict]) -> None:
     print(f"\n  Checking availability for {len(results)} domains...", flush=True)
     for i, r in enumerate(results):
-        avail, _ = check_availability(r["domain"])
-        r["available"] = avail
-        r["avail_label"] = _availability_label(r["sld"], avail)
+        status, _ = check_availability(r["domain"])
+        r["available"] = status
+        r["avail_label"] = _availability_label(r["sld"], status)
         if (i + 1) % 5 == 0:
             print(f"  {i + 1}/{len(results)} checked...", flush=True)
         time.sleep(0.3)
@@ -1350,40 +1362,85 @@ def cmd_generate(args):
     # --- Phase 3: availability check first ---
     if do_check:
         available_slds: list[str] = []
+        unknown_slds: list[str] = []
         taken_domains: list[str] = []
         total = len(slds)
-        print(f"\n  Checking availability for {total} candidates via {provider}...", flush=True)
+
+        if provider == "dns":
+            print(f"\n  \033[93m[WARNING] DNS mode cannot confirm availability.\033[0m", flush=True)
+            print(f"  DNS checks only detect if a domain RESOLVES (likely taken).", flush=True)
+            print(f"  Domains with no DNS record are UNKNOWN — not confirmed available.", flush=True)
+            print(f"  Use --availability-provider spaceship for real availability checks.\n", flush=True)
+
+        print(f"  Checking {total} candidates via {provider}...", flush=True)
         for i, sld in enumerate(slds):
             domain = sld + tld
-            avail, _ = check_availability_provider(domain, provider)
-            if avail:
+            status, _ = check_availability_provider(domain, provider)
+            if status == "available":
                 available_slds.append(sld)
-            else:
+            elif status == "taken":
                 taken_domains.append(domain)
+            else:  # "unknown"
+                unknown_slds.append(sld)
             if (i + 1) % 10 == 0:
-                print(f"  {i + 1}/{total} checked — {len(available_slds)} available so far...",
+                checked_label = len(available_slds) if provider == "spaceship" else len(unknown_slds)
+                label_word = "available" if provider == "spaceship" else "unknown"
+                print(f"  {i + 1}/{total} checked — {checked_label} {label_word} so far...",
                       flush=True)
             time.sleep(0.3)
 
-        print(f"  Done. {len(available_slds)} available, {len(taken_domains)} taken.\n", flush=True)
+        if provider == "spaceship":
+            print(f"  Done. {len(available_slds)} available, {len(taken_domains)} taken, "
+                  f"{len(unknown_slds)} unknown.\n", flush=True)
 
-        # --- Phase 4: score only available domains ---
-        scored = [_score_sld(sld, tld, style, keywords, patterns) for sld in available_slds]
-        scored.sort(key=lambda x: -x["score"])
-        scored = scored[:args.count]
+            # --- Phase 4: score only confirmed available domains ---
+            scored = [_score_sld(sld, tld, style, keywords, patterns) for sld in available_slds]
+            scored.sort(key=lambda x: -x["score"])
+            scored = scored[:args.count]
 
-        if args.json:
-            output = {"available": scored, "taken": taken_domains}
-            print(json.dumps(output, indent=2))
-            return
+            if args.json:
+                output = {"available": scored, "taken": taken_domains, "unknown": unknown_slds}
+                print(json.dumps(output, indent=2))
+                return
 
-        if scored:
-            _print_scored_table(scored, f"Available Domains — {title}", args.no_color)
+            if scored:
+                _print_scored_table(scored, f"Available Domains — {title}", args.no_color)
+            else:
+                print("  No confirmed available domains found in this run.\n")
+
+            if show_taken and taken_domains:
+                _print_taken_section(taken_domains, tld, args.no_color)
+
         else:
-            print("  No available domains found in this run.\n")
+            # DNS mode: never score, show unknowns as candidates to verify
+            all_unknown_domains = [sld + tld for sld in unknown_slds]
+            print(f"  Done. {len(taken_domains)} likely taken (DNS resolves), "
+                  f"{len(unknown_slds)} unknown (no DNS — verify with registrar).\n", flush=True)
 
-        if show_taken and taken_domains:
-            _print_taken_section(taken_domains, tld, args.no_color)
+            if args.json:
+                output = {"unknown_candidates": all_unknown_domains, "taken": taken_domains}
+                print(json.dumps(output, indent=2))
+                return
+
+            def c(text, code=""):
+                return text if args.no_color else f"{code}{text}{RESET}"
+
+            if all_unknown_domains:
+                print(c(f"  Unknown Candidates to Verify — {title}", BOLD))
+                print(c("  (No DNS record found — may or may not be available. Verify at a registrar.)",
+                        "\033[93m"))
+                print()
+                for domain in sorted(all_unknown_domains, key=len):
+                    print(f"  {domain}")
+                print()
+                print(c("  These domains are NOT scored. DNS cannot confirm availability.", "\033[93m"))
+                print(c("  Run with --availability-provider spaceship for real checks.\n", "\033[93m"))
+            else:
+                print("  All candidates appear to be taken (DNS resolves). Nothing to verify.\n")
+
+            if show_taken and taken_domains:
+                _print_taken_section(taken_domains, tld, args.no_color)
+            return
 
     else:
         # --- No availability check: score all candidates ---

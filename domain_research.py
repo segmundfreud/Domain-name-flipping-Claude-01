@@ -377,7 +377,473 @@ def cmd_bulk(args):
 
 
 # ---------------------------------------------------------------------------
-# Domain generator
+# Market presets
+# ---------------------------------------------------------------------------
+
+PRESETS: dict[str, dict] = {
+    "ai-saas": {
+        "buyer_intent": "very high",
+        "keywords": [
+            "ai", "agent", "prompt", "model", "workflow", "copilot", "data",
+            "insight", "bot", "neural", "task", "ops", "stack", "flow",
+            "automate", "sync", "parse", "embed", "infer", "query",
+        ],
+        "prefixes": ["get", "go", "run", "use", "try", "my", "open", "super"],
+        "suffixes": ["ly", "io", "hq", "lab", "co", "fy", "base", "ops",
+                     "hub", "ai", "core", "mind", "iq", "gpt", "ml"],
+        "patterns": [
+            "agentflow", "agentops", "agentiq", "agenthq", "agentbase",
+            "promptly", "promptlab", "promptops", "prompthq",
+            "taskflow", "taskops", "taskhq", "taskbase", "taskly",
+            "flowops", "flowbase", "flowhq", "flowai", "flowcore",
+            "copilotly", "copilothq",
+            "neuralops", "neuralhq", "neuralbase",
+            "inferai", "inferops", "inferhq",
+            "embedai", "embedops",
+            "syncops", "synchq", "syncflow",
+            "queryai", "queryhq",
+            "stackai", "stackops", "stackflow", "stackhq",
+            "insightops", "insighthq", "insightai",
+            "dataops", "datahq", "dataflow", "datacore",
+            "botflow", "bothq", "botops",
+            "modelops", "modelhq",
+            "runai", "runops", "runflow",
+            "openflow", "openops",
+            "superops", "superhq",
+        ],
+        "avoid": {"free", "cheap", "best", "online", "web", "digital",
+                  "pro", "smart", "easy", "fast", "new", "top"},
+        "style": "premium short brandable",
+    },
+    "fintech": {
+        "buyer_intent": "very high",
+        "keywords": [
+            "pay", "finance", "money", "cash", "fund", "bank", "invest",
+            "wallet", "ledger", "credit", "loan", "yield", "capital",
+            "transfer", "spend", "earn", "settle", "vault", "fx",
+        ],
+        "prefixes": ["get", "go", "my", "open", "prime", "clear", "swift"],
+        "suffixes": ["ly", "io", "hq", "co", "fy", "base", "hub",
+                     "pay", "card", "wire", "flow", "ledger"],
+        "patterns": [
+            "payhq", "paybase", "payflow", "paycore", "payops",
+            "fundly", "fundhq", "fundflow",
+            "walletly", "wallethq",
+            "ledgerops", "ledgerhq", "ledgerbase",
+            "yieldbase", "yieldhq",
+            "vaultly", "vaulthq", "vaultbase",
+            "clearfund", "clearledger", "clearpay",
+            "swiftpay", "swiftfund",
+            "spendly", "spendhq",
+            "earnly", "earnhq",
+            "creditops", "credithq",
+            "settlehq", "settleops",
+        ],
+        "avoid": {"cheap", "free", "best", "online", "digital", "web"},
+        "style": "premium short trustworthy",
+    },
+    "cybersecurity": {
+        "buyer_intent": "high",
+        "keywords": [
+            "shield", "vault", "guard", "secure", "cipher", "key", "lock",
+            "auth", "threat", "detect", "scan", "patch", "zero", "trust",
+            "soc", "cert", "firewall", "pentest", "red", "blue",
+        ],
+        "prefixes": ["get", "go", "open", "ultra", "meta", "dark", "deep"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "core", "hub", "ai"],
+        "patterns": [
+            "shieldhq", "shieldops", "shieldai", "shieldbase",
+            "vaultops", "vaulthq", "vaultai",
+            "guardhq", "guardops", "guardai",
+            "cipherhq", "cipherops", "cipherbase",
+            "authhq", "authops", "authbase", "authcore",
+            "zerotrust", "zerosoc",
+            "threathq", "threatops", "threatbase",
+            "scanhq", "scanops",
+            "patchhq", "patchops",
+            "redteamhq", "blueteamhq",
+            "sochq", "socops", "socbase",
+            "firewallhq",
+            "pentesthq",
+            "darkshield", "deepscan",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "simple", "web", "online"},
+        "style": "premium short technical",
+    },
+    "healthtech": {
+        "buyer_intent": "high",
+        "keywords": [
+            "health", "care", "med", "clinical", "patient", "vital",
+            "dose", "lab", "dna", "gene", "bio", "wellness", "heal",
+            "rx", "ehr", "tele", "remote", "monitor", "sync",
+        ],
+        "prefixes": ["get", "my", "open", "clear", "smart", "one"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "core", "hub", "ai", "md"],
+        "patterns": [
+            "carehq", "careops", "carebase", "careai", "carecore",
+            "medhq", "medops", "medbase", "medai", "medcore",
+            "vitalhq", "vitalops", "vitalbase", "vitalai",
+            "clinicops", "clinichq", "clinicbase",
+            "patienthq", "patientops",
+            "rxhq", "rxops", "rxbase",
+            "ehrhq", "ehrops",
+            "telehq", "teleops", "telemd",
+            "biohq", "bioops", "biobase", "biocore",
+            "genehq", "geneops",
+            "dosehq", "doseops",
+            "monitorhq", "monitorops",
+            "healops", "healhq",
+            "wellnesshq", "wellnessops",
+        ],
+        "avoid": {"cheap", "free", "best", "fast", "easy", "online", "web"},
+        "style": "premium trustworthy clinical",
+    },
+    "legaltech": {
+        "buyer_intent": "high",
+        "keywords": [
+            "legal", "law", "contract", "clause", "brief", "case",
+            "counsel", "firm", "court", "comply", "audit", "sign",
+            "doc", "esign", "notary", "para", "trial", "dispute",
+        ],
+        "prefixes": ["get", "open", "clear", "my", "smart", "one"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "ai", "hub", "core"],
+        "patterns": [
+            "legalhq", "legalops", "legalbase", "legalai", "legalcore",
+            "contracthq", "contractops", "contractai", "contractbase",
+            "clausehq", "clauseops", "clauseai",
+            "briefhq", "briefops",
+            "casehq", "caseops", "casebase",
+            "counselhq", "counselops",
+            "complyops", "complyhq", "complybase", "complyai",
+            "audithq", "auditops", "auditbase", "auditai",
+            "signhq", "signops", "signbase",
+            "esignhq", "esignops",
+            "notaryhq", "notaryops",
+            "disputehq", "disputeops",
+            "dochq", "docops",
+            "parahq", "paraops",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "fast", "web", "online"},
+        "style": "premium trustworthy professional",
+    },
+    "realestate-tech": {
+        "buyer_intent": "high",
+        "keywords": [
+            "home", "property", "listing", "deed", "rent", "lease",
+            "title", "escrow", "mortgage", "broker", "realty", "zoning",
+            "close", "offer", "mls", "tenant", "landlord", "appraise",
+        ],
+        "prefixes": ["get", "open", "my", "clear", "smart", "one", "nest"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "ai", "hub", "core"],
+        "patterns": [
+            "proptechhq", "propbase", "propops", "propai",
+            "listinghq", "listingops", "listingbase",
+            "renthq", "rentops", "rentbase", "rentai",
+            "leasehq", "leaseops", "leasebase",
+            "titlehq", "titleops", "titlebase",
+            "escrowhq", "escrowops",
+            "closehq", "closeops",
+            "brokerhq", "brokerops", "brokerbase",
+            "realtyhq", "realtyops", "realtybase",
+            "tenanthq", "tenantops",
+            "offerhq", "offerops", "offerbase",
+            "mlshq", "mlsops",
+            "appraisehq",
+            "nestops", "nesthq", "nestbase", "nestai",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "web", "online", "digital"},
+        "style": "premium trustworthy modern",
+    },
+    "hr-recruiting": {
+        "buyer_intent": "high",
+        "keywords": [
+            "hire", "talent", "recruit", "screen", "onboard", "team",
+            "people", "workforce", "staff", "career", "resume", "apply",
+            "interview", "ats", "hris", "payroll", "bench", "source",
+        ],
+        "prefixes": ["get", "open", "my", "smart", "one", "top"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "ai", "hub", "core"],
+        "patterns": [
+            "hirehq", "hireops", "hirebase", "hireai", "hirecore",
+            "talenthq", "talentops", "talentbase", "talentai",
+            "recruithq", "recruitops", "recruitbase", "recruitai",
+            "screenhq", "screenops", "screenbase", "screenai",
+            "onboardhq", "onboardops", "onboardbase",
+            "teamhq", "teamops", "teambase",
+            "peoplehq", "peopleops", "peoplebase", "peopleai",
+            "staffhq", "staffops", "staffbase",
+            "careerhq", "careerops", "careerbase",
+            "atshq", "atsops",
+            "hrishq", "hrisops",
+            "payrollhq", "payrollops",
+            "sourcehq", "sourceops",
+            "benchhq", "benchops",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "fast", "web", "online"},
+        "style": "premium modern professional",
+    },
+    "sales-automation": {
+        "buyer_intent": "very high",
+        "keywords": [
+            "sales", "lead", "crm", "pipeline", "outreach", "sequence",
+            "close", "prospect", "deal", "revenue", "quota", "forecast",
+            "engage", "convert", "follow", "signal", "intent", "score",
+        ],
+        "prefixes": ["get", "go", "open", "my", "smart", "one", "super"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "ai", "hub", "core"],
+        "patterns": [
+            "saleshq", "salesops", "salesbase", "salesai", "salescore",
+            "leadhq", "leadops", "leadbase", "leadai",
+            "crmhq", "crmops", "crmbase", "crmai",
+            "pipelinehq", "pipelineops", "pipelinebase",
+            "outreachhq", "outreachops", "outreachbase", "outreachai",
+            "closehq", "closeops", "closebase", "closeai",
+            "prospecthq", "prospectops", "prospectbase",
+            "revenuehq", "revenueops", "revenuebase",
+            "forecasthq", "forecastops",
+            "engagehq", "engageops", "engagebase", "engageai",
+            "converthq", "convertops",
+            "signalhq", "signalops", "signalbase", "signalai",
+            "scorehq", "scoreops", "scorebase",
+            "intenhq", "intentops", "intentbase", "intentai",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "fast", "web", "online"},
+        "style": "premium short high-intent",
+    },
+    "creator-tools": {
+        "buyer_intent": "medium",
+        "keywords": [
+            "create", "content", "video", "clip", "edit", "caption",
+            "script", "brand", "voice", "studio", "publish", "schedule",
+            "post", "channel", "stream", "reel", "thumb", "hook",
+        ],
+        "prefixes": ["get", "go", "my", "open", "super", "fast"],
+        "suffixes": ["ly", "io", "hq", "co", "fy", "lab", "hub", "ai"],
+        "patterns": [
+            "createhq", "createops", "createai", "createbase",
+            "contenthq", "contentops", "contentai", "contentbase",
+            "videohq", "videoops", "videoai",
+            "cliphq", "clipops", "clipai",
+            "edithq", "editops", "editai", "editbase",
+            "captionhq", "captionops", "captionai",
+            "scripthq", "scriptops", "scriptai",
+            "brandhq", "brandops", "brandai", "brandbase",
+            "voicehq", "voiceops", "voiceai",
+            "publishhq", "publishops",
+            "schedulehq", "scheduleops",
+            "streamhq", "streamops", "streamai",
+            "reelhq", "reelops", "reelai",
+            "thumbhq", "thumbops", "thumbai",
+            "hookhq", "hookops", "hookai",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "fast", "web", "online"},
+        "style": "short catchy modern",
+    },
+    "analytics-data": {
+        "buyer_intent": "high",
+        "keywords": [
+            "data", "metric", "insight", "report", "track", "event",
+            "query", "pipeline", "warehouse", "chart", "dash", "bi",
+            "cohort", "funnel", "segment", "attribute", "anomaly", "log",
+        ],
+        "prefixes": ["get", "open", "my", "clear", "smart", "deep"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "ai", "hub", "core"],
+        "patterns": [
+            "datahq", "dataops", "database", "dataai", "datacore",
+            "metrichq", "metricops", "metricbase", "metricai",
+            "insighthq", "insightops", "insightbase", "insightai",
+            "reporthq", "reportops", "reportbase",
+            "trackhq", "trackops", "trackbase", "trackai",
+            "queryhq", "queryops", "querybase", "queryai",
+            "pipelinehq", "pipelineops",
+            "warehousehq",
+            "charthq", "chartops",
+            "dashhq", "dashops", "dashbase", "dashai",
+            "bihq", "biops", "bibase",
+            "cohorthq", "cohortops",
+            "funnelhq", "funnelops",
+            "segmenthq", "segmentops", "segmentbase",
+            "anomalyhq", "anomalyops",
+            "loghq", "logops", "logbase",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "web", "online"},
+        "style": "premium short technical",
+    },
+    "ecommerce-tools": {
+        "buyer_intent": "high",
+        "keywords": [
+            "store", "shop", "cart", "checkout", "order", "ship",
+            "return", "product", "catalog", "inventory", "sell",
+            "merchant", "listing", "review", "upsell", "bundle", "price",
+        ],
+        "prefixes": ["get", "go", "my", "open", "smart", "one"],
+        "suffixes": ["ly", "io", "hq", "ops", "base", "ai", "hub", "core"],
+        "patterns": [
+            "storehq", "storeops", "storebase", "storeai",
+            "carthq", "cartops", "cartbase", "cartai",
+            "checkouthq", "checkoutops",
+            "orderhq", "orderops", "orderbase",
+            "shiphq", "shipops", "shipbase",
+            "returnhq", "returnops",
+            "producthq", "productops", "productbase",
+            "inventoryhq", "inventoryops",
+            "merchanthq", "merchantops",
+            "listinghq", "listingops",
+            "reviewhq", "reviewops",
+            "upsellhq", "upsellops",
+            "bundlehq", "bundleops",
+            "pricehq", "priceops", "priceai",
+            "sellhq", "sellops", "sellbase",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "fast", "web", "online"},
+        "style": "premium modern commerce",
+    },
+    "productivity": {
+        "buyer_intent": "medium",
+        "keywords": [
+            "task", "focus", "plan", "note", "doc", "team", "flow",
+            "work", "sprint", "goal", "habit", "track", "remind",
+            "inbox", "block", "async", "standup", "retro", "okr",
+        ],
+        "prefixes": ["get", "go", "my", "open", "super", "one", "daily"],
+        "suffixes": ["ly", "io", "hq", "co", "fy", "lab", "hub", "ai"],
+        "patterns": [
+            "taskhq", "taskops", "taskbase", "taskai", "taskflow",
+            "focushq", "focusops", "focusai",
+            "planhq", "planops", "planbase", "planai",
+            "notehq", "noteops", "notebase",
+            "dochq", "docops", "docbase",
+            "teamhq", "teamops", "teambase", "teamai",
+            "flowhq", "flowops", "flowbase", "flowai",
+            "workhq", "workops", "workbase",
+            "sprintnhq", "sprintops",
+            "goalhq", "goalops", "goalbase",
+            "habithq", "habitops",
+            "inboxhq", "inboxops",
+            "asynchq", "asyncops",
+            "standups", "standuphq",
+            "okrhq", "okrops", "okrbase",
+            "retrohq", "retroops",
+            "blockhq", "blockops",
+        ],
+        "avoid": {"cheap", "free", "best", "easy", "fast", "web", "online"},
+        "style": "short catchy modern",
+    },
+}
+
+
+def generate_from_preset(
+    preset_name: str,
+    count: int,
+    tld: str,
+    max_sld_len: int = 15,
+) -> list[dict]:
+    if preset_name not in PRESETS:
+        raise ValueError(f"Unknown preset '{preset_name}'. Available: {', '.join(PRESETS)}")
+
+    p = PRESETS[preset_name]
+    keywords: list[str] = p["keywords"]
+    prefixes: list[str] = p["prefixes"]
+    suffixes: list[str] = p["suffixes"]
+    patterns: list[str] = p["patterns"]
+    avoid: set[str] = p["avoid"]
+    style: str = p["style"]
+    tld = tld if tld.startswith(".") else f".{tld}"
+
+    candidates: set[str] = set()
+
+    # prefix + keyword
+    for pre in prefixes:
+        for kw in keywords:
+            candidates.add(pre + kw)
+
+    # keyword + suffix
+    for kw in keywords:
+        for suf in suffixes:
+            candidates.add(kw + suf)
+
+    # keyword + keyword (short pairs only)
+    for i, kw1 in enumerate(keywords):
+        for kw2 in keywords[i + 1:]:
+            combo = kw1 + kw2
+            if len(combo) <= max_sld_len:
+                candidates.add(combo)
+
+    # invented patterns
+    for pat in patterns:
+        candidates.add(pat)
+
+    # keyword alone
+    for kw in keywords:
+        candidates.add(kw)
+
+    valid = [s for s in candidates if _is_valid_sld(s, max_sld_len)]
+
+    scored = []
+    for sld in valid:
+        domain = sld + tld
+        sb = score_domain(domain)
+
+        # Penalty: contains an avoid word as standalone sld
+        avoid_hit = sld in avoid
+        avoid_combo = any(
+            sld == av + rest or sld == rest + av
+            for av in avoid
+            for rest in [""]
+            if rest == sld.replace(av, "", 1)
+        )
+        generic_penalty = 40 if avoid_hit else 0
+
+        # Penalty for prefix+suffix only (no keyword)
+        pure_affixes = set(suffixes) | set(prefixes)
+        affix_only = False
+        for pre in prefixes:
+            if sld.startswith(pre):
+                remainder = sld[len(pre):]
+                if remainder in pure_affixes and remainder not in keywords:
+                    affix_only = True
+                    break
+        if affix_only:
+            generic_penalty += 40
+
+        adjusted = max(0, int((sb.total - generic_penalty) * _style_multiplier(sld, style)))
+
+        # Build reason
+        reasons = []
+        kw_hits = [kw for kw in keywords if kw in sld]
+        if kw_hits:
+            reasons.append(f"keyword: {', '.join(kw_hits[:2])}")
+        if sld in patterns:
+            reasons.append("preset pattern")
+        if len(sld) <= 5:
+            reasons.append("very short")
+        elif len(sld) <= 8:
+            reasons.append("short")
+        if avoid_hit:
+            reasons.append("avoid word — penalised")
+        if affix_only:
+            reasons.append("affix-only — penalised")
+        if not kw_hits and sld not in patterns:
+            reasons.append("no keyword signal")
+
+        scored.append({
+            "domain": domain,
+            "sld": sld,
+            "tld": tld,
+            "length": len(sld),
+            "score": adjusted,
+            "tier": sb.tier,
+            "reason": "; ".join(reasons) if reasons else "generic",
+            "preset": preset_name,
+            "buyer_intent": p["buyer_intent"],
+        })
+
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:count]
+
+
+# ---------------------------------------------------------------------------
+# Domain generator (manual mode)
 # ---------------------------------------------------------------------------
 
 # Strong niche tokens per keyword — only specific, brandable words
@@ -620,32 +1086,97 @@ def _availability_label(sld: str, available: Optional[bool]) -> str:
         return "taken"
 
 
-def cmd_generate(args):
+def _run_availability_checks(results: list[dict]) -> None:
     import time
+    print(f"\n  Checking availability for {len(results)} domains...", flush=True)
+    for i, r in enumerate(results):
+        avail, _ = check_availability(r["domain"])
+        r["available"] = avail
+        r["avail_label"] = _availability_label(r["sld"], avail)
+        if (i + 1) % 5 == 0:
+            print(f"  {i + 1}/{len(results)} checked...", flush=True)
+        time.sleep(0.3)
 
+
+def _print_generate_table(results: list[dict], title: str, do_check: bool,
+                          no_color: bool) -> None:
+    def c(text, code=""):
+        return text if no_color else f"{code}{text}{RESET}"
+
+    AVAIL_COLORS = {
+        "available":                     "\033[92m",
+        "taken":                         "\033[91m",
+        "likely premium/taken":          "\033[91m",
+        "likely premium/taken — verify": "\033[93m",
+        "unknown":                       "\033[90m",
+        "not checked":                   "\033[90m",
+    }
+
+    print()
+    print(c(f"  {title}", BOLD))
+    print()
+
+    if do_check:
+        header = f"  {'Domain':<24} {'Availability':<28} {'Score':<7} {'Len':<5} Reason"
+        print(c(header, BOLD))
+        print("  " + "-" * 92)
+        for r in results:
+            label = r.get("avail_label", "not checked")
+            avail_col = AVAIL_COLORS.get(label, "")
+            print(
+                f"  {r['domain']:<24} "
+                f"{c(label, avail_col):<38} "
+                f"{r['score']:<7} "
+                f"{r['length']:<5} "
+                f"{r['reason']}"
+            )
+    else:
+        header = f"  {'Domain':<24} {'Score':<7} {'Tier':<10} {'Len':<5} Reason"
+        print(c(header, BOLD))
+        print("  " + "-" * 82)
+        for r in results:
+            tier_col = TIER_COLORS.get(r["tier"], "")
+            print(
+                f"  {r['domain']:<24} "
+                f"{r['score']:<7} "
+                f"{c(r['tier'], tier_col):<20} "
+                f"{r['length']:<5} "
+                f"{r['reason']}"
+            )
+
+    print(f"\n  {len(results)} domains generated.\n")
+
+
+def cmd_generate(args):
     tld = args.tld if args.tld.startswith(".") else f".{args.tld}"
     raw_check = getattr(args, "check", None)
     do_check = raw_check is not None and str(raw_check).lower() not in ("false", "0", "no")
+    preset_name = getattr(args, "preset", None)
 
-    results = generate_domains(
-        niche=args.niche,
-        market=args.market,
-        style=args.style,
-        count=args.count,
-        tld=tld,
-    )
+    if preset_name:
+        if preset_name not in PRESETS:
+            print(f"  Unknown preset '{preset_name}'. Available presets:", file=sys.stderr)
+            for k, v in PRESETS.items():
+                print(f"    {k:<22} (buyer intent: {v['buyer_intent']})", file=sys.stderr)
+            sys.exit(1)
+        results = generate_from_preset(preset_name, args.count, tld)
+        title = f"Preset: {preset_name}  |  buyer intent: {PRESETS[preset_name]['buyer_intent']}  |  tld: {tld}"
+    else:
+        # Manual mode — niche/market/style required
+        if not getattr(args, "niche", None) or not getattr(args, "market", None):
+            print("  Error: --niche and --market are required when not using --preset", file=sys.stderr)
+            sys.exit(1)
+        results = generate_domains(
+            niche=args.niche,
+            market=args.market,
+            style=getattr(args, "style", "premium short"),
+            count=args.count,
+            tld=tld,
+        )
+        title = f"niche: {args.niche}  |  market: {args.market}  |  tld: {tld}"
 
-    # Availability checking with small delay to avoid DNS spam
     if do_check:
-        print(f"\n  Checking availability for {len(results)} domains...", flush=True)
-        for i, r in enumerate(results):
-            avail, _ = check_availability(r["domain"])
-            r["available"] = avail
-            r["avail_label"] = _availability_label(r["sld"], avail)
-            # Print a dot every 5 checks so the user sees progress
-            if (i + 1) % 5 == 0:
-                print(f"  {i + 1}/{len(results)} checked...", flush=True)
-            time.sleep(0.3)
+        _run_availability_checks(results)
     else:
         for r in results:
             r["available"] = None
@@ -655,52 +1186,7 @@ def cmd_generate(args):
         print(json.dumps(results, indent=2))
         return
 
-    def c(text, code=""):
-        return text if args.no_color else f"{code}{text}{RESET}"
-
-    AVAIL_COLORS = {
-        "available":                    "\033[92m",  # green
-        "taken":                        "\033[91m",  # red
-        "likely premium/taken":         "\033[91m",  # red
-        "likely premium/taken — verify": "\033[93m", # yellow
-        "unknown":                      "\033[90m",  # grey
-        "not checked":                  "\033[90m",  # grey
-    }
-
-    print()
-    print(c(f"  Generated domains  |  niche: {args.niche}  |  market: {args.market}  |  style: {args.style}", BOLD))
-    print()
-
-    if do_check:
-        header = f"  {'Domain':<22} {'Availability':<28} {'Score':<7} {'Len':<5} Reason"
-        print(c(header, BOLD))
-        print("  " + "-" * 90)
-        for r in results:
-            label = r["avail_label"]
-            avail_col = AVAIL_COLORS.get(label, "")
-            tier_col = TIER_COLORS.get(r["tier"], "")
-            print(
-                f"  {r['domain']:<22} "
-                f"{c(label, avail_col):<38} "
-                f"{r['score']:<7} "
-                f"{r['length']:<5} "
-                f"{r['reason']}"
-            )
-    else:
-        header = f"  {'Domain':<22} {'Score':<7} {'Tier':<10} {'Len':<5} Reason"
-        print(c(header, BOLD))
-        print("  " + "-" * 80)
-        for r in results:
-            tier_col = TIER_COLORS.get(r["tier"], "")
-            print(
-                f"  {r['domain']:<22} "
-                f"{r['score']:<7} "
-                f"{c(r['tier'], tier_col):<20} "
-                f"{r['length']:<5} "
-                f"{r['reason']}"
-            )
-
-    print(f"\n  {len(results)} domains generated.\n")
+    _print_generate_table(results, title, do_check, args.no_color)
 
 
 def _add_common(p):
@@ -746,13 +1232,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     # generate
     p_gen = sub.add_parser("generate", help="Generate and score domain name ideas")
-    p_gen.add_argument("--niche", required=True, help='Business niche, e.g. "barber shop"')
-    p_gen.add_argument("--market", required=True, help='Target market or city, e.g. "Casablanca"')
-    p_gen.add_argument("--style", default="premium short", help='Style hint, e.g. "premium short"')
+    p_gen.add_argument("--preset", default=None,
+                       help=f'Use a market preset. Available: {", ".join(PRESETS)}')
+    p_gen.add_argument("--niche", default=None, help='Manual mode: business niche, e.g. "barber shop"')
+    p_gen.add_argument("--market", default=None, help='Manual mode: target market or city')
+    p_gen.add_argument("--style", default="premium short", help='Style hint (manual mode)')
     p_gen.add_argument("--count", type=int, default=20, help="Number of results to show (default: 20)")
     p_gen.add_argument("--tld", default=".com", help="TLD to use (default: .com)")
     p_gen.add_argument("--check", nargs="?", const="true", default=None,
-                       help='Check DNS availability for each generated domain (--check or --check true)')
+                       help="Check DNS availability for each generated domain")
     _add_common(p_gen)
     p_gen.set_defaults(func=cmd_generate)
 

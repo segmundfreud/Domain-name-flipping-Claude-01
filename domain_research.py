@@ -1335,6 +1335,10 @@ def cmd_generate(args):
     provider = getattr(args, "availability_provider", "dns")
     preset_name = getattr(args, "preset", None)
 
+    # Resolve --max-checks: explicit arg overrides provider-specific default
+    default_max = 50 if provider == "spaceship" else 200
+    max_checks: int = getattr(args, "max_checks", None) or default_max
+
     # --- Phase 1: generate raw candidates ---
     if preset_name:
         if preset_name not in PRESETS:
@@ -1356,42 +1360,49 @@ def cmd_generate(args):
         style = getattr(args, "style", "premium short")
         title = f"niche: {args.niche}  |  market: {getattr(args, 'market', '')}  |  tld: {tld}"
 
-    # --- Phase 2: basic local filter (no scoring yet) ---
+    # --- Phase 2: basic local filter ---
     slds = _filter_candidates(raw, max_sld_len=15)
+    print(f"\n  Generated {len(raw)} candidates → filtered to {len(slds)} clean candidates.", flush=True)
 
-    # --- Phase 3: availability check first ---
+    # --- Phase 3: availability check ---
     if do_check:
+        # Pre-rank locally so we check the most promising names first
+        pre_ranked = sorted(
+            slds,
+            key=lambda s: -_score_sld(s, tld, style, keywords, patterns)["score"],
+        )
+        to_check = pre_ranked[:max_checks]
+
         available_slds: list[str] = []
         unknown_slds: list[str] = []
         taken_domains: list[str] = []
-        total = len(slds)
 
         if provider == "dns":
-            print(f"\n  \033[93m[WARNING] DNS mode cannot confirm availability.\033[0m", flush=True)
+            print(f"  \033[93m[WARNING] DNS mode cannot confirm availability.\033[0m", flush=True)
             print(f"  DNS checks only detect if a domain RESOLVES (likely taken).", flush=True)
             print(f"  Domains with no DNS record are UNKNOWN — not confirmed available.", flush=True)
-            print(f"  Use --availability-provider spaceship for real availability checks.\n", flush=True)
+            print(f"  Use --availability-provider spaceship for real availability checks.", flush=True)
 
-        print(f"  Checking {total} candidates via {provider}...", flush=True)
-        for i, sld in enumerate(slds):
+        print(f"  Checking top {len(to_check)} candidates using {provider}...\n", flush=True)
+        for i, sld in enumerate(to_check):
             domain = sld + tld
             status, _ = check_availability_provider(domain, provider)
             if status == "available":
                 available_slds.append(sld)
             elif status == "taken":
                 taken_domains.append(domain)
-            else:  # "unknown"
+            else:
                 unknown_slds.append(sld)
             if (i + 1) % 10 == 0:
                 checked_label = len(available_slds) if provider == "spaceship" else len(unknown_slds)
                 label_word = "available" if provider == "spaceship" else "unknown"
-                print(f"  {i + 1}/{total} checked — {checked_label} {label_word} so far...",
+                print(f"  {i + 1}/{len(to_check)} checked — {checked_label} {label_word} so far...",
                       flush=True)
             time.sleep(0.3)
 
         if provider == "spaceship":
-            print(f"  Done. {len(available_slds)} available, {len(taken_domains)} taken, "
-                  f"{len(unknown_slds)} unknown.\n", flush=True)
+            print(f"\n  Found {len(available_slds)} available domains"
+                  f" ({len(taken_domains)} taken, {len(unknown_slds)} unknown).\n", flush=True)
 
             # --- Phase 4: score only confirmed available domains ---
             scored = [_score_sld(sld, tld, style, keywords, patterns) for sld in available_slds]
@@ -1414,7 +1425,7 @@ def cmd_generate(args):
         else:
             # DNS mode: never score, show unknowns as candidates to verify
             all_unknown_domains = [sld + tld for sld in unknown_slds]
-            print(f"  Done. {len(taken_domains)} likely taken (DNS resolves), "
+            print(f"\n  {len(taken_domains)} likely taken (DNS resolves), "
                   f"{len(unknown_slds)} unknown (no DNS — verify with registrar).\n", flush=True)
 
             if args.json:
@@ -1453,7 +1464,7 @@ def cmd_generate(args):
             return
 
         _print_scored_table(scored, title, args.no_color)
-        print(f"  {len(scored)} domains generated (availability not checked).\n")
+        print(f"  {len(scored)} domains shown (availability not checked).\n")
 
 
 def _add_common(p):
@@ -1515,6 +1526,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.add_argument("--show-taken", action="store_true", default=False,
                        dest="show_taken",
                        help="Show taken domains in a separate unscored inspiration section")
+    p_gen.add_argument("--max-checks", type=int, default=None,
+                       dest="max_checks",
+                       help="Max candidates to check for availability (default: 50 for spaceship, 200 for dns)")
     _add_common(p_gen)
     p_gen.set_defaults(func=cmd_generate)
 

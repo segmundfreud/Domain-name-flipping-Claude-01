@@ -1,0 +1,11 @@
+# Sample domain list for bulk analysis
+aitools.com
+buynow.io
+xyz123.net
+smartpay.ai
+cloudhub.co
+my-blog-2024.info
+getfit.app
+datalab.dev
+cryptoexchange.com
+gofast.me
